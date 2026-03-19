@@ -11,6 +11,7 @@ Improvements over v1:
 import logging
 import re
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -218,34 +219,69 @@ def _extract_schedule(
 # ── Core: Tile-based OCR ─────────────────────────────────────────────────────
 
 
-def _find_nearby_quantity_in_tile(
-    target_bbox: list[float],
+def _find_qty_tags_in_tile(
     all_texts: list[tuple[list, str, float]],
-    search_radius: float = 200,
-) -> int | None:
-    """Search nearby OCR text boxes within a single tile for a QTY callout."""
-    tcx = (target_bbox[0] + target_bbox[2]) / 2
-    tcy = (target_bbox[1] + target_bbox[3]) / 2
+) -> list[tuple[list[float], int]]:
+    """Extract all QTY tags from a tile's OCR results.
 
+    Returns list of (bbox, quantity) tuples.
+    """
+    qty_tags = []
     for points, text, _conf in all_texts:
         bbox = _bbox_from_points(points)
-        cx = (bbox[0] + bbox[2]) / 2
-        cy = (bbox[1] + bbox[3]) / 2
-        dist = ((tcx - cx) ** 2 + (tcy - cy) ** 2) ** 0.5
-        if dist > search_radius:
-            continue
-
         qty_match = QTY_EXPLICIT_RE.search(text)
         if qty_match:
-            return int(qty_match.group(1))
-
+            qty_tags.append((bbox, int(qty_match.group(1))))
+            continue
         paren_match = QTY_PAREN_RE.search(text)
         if paren_match:
             val = int(paren_match.group(1))
             if 1 <= val <= 99:
-                return val
+                qty_tags.append((bbox, val))
+    return qty_tags
 
-    return None
+
+def _assign_qty_1to1(
+    fixture_bboxes: list[tuple[str, list[float]]],
+    qty_tags: list[tuple[list[float], int]],
+    search_radius: float = 200,
+) -> dict[int, int]:
+    """1:1 nearest-neighbor assignment of QTY tags to fixture codes.
+
+    Each QTY tag is assigned to at most one fixture (the nearest one within
+    search_radius). Each fixture gets at most one QTY tag.
+
+    Returns mapping of fixture_index -> quantity.
+    """
+    if not qty_tags or not fixture_bboxes:
+        return {}
+
+    # Build distance matrix: (dist, fixture_idx, qty_idx)
+    pairs = []
+    for fi, (_code, fbbox) in enumerate(fixture_bboxes):
+        fcx = (fbbox[0] + fbbox[2]) / 2
+        fcy = (fbbox[1] + fbbox[3]) / 2
+        for qi, (qbbox, _qty) in enumerate(qty_tags):
+            qcx = (qbbox[0] + qbbox[2]) / 2
+            qcy = (qbbox[1] + qbbox[3]) / 2
+            dist = ((fcx - qcx) ** 2 + (fcy - qcy) ** 2) ** 0.5
+            if dist <= search_radius:
+                pairs.append((dist, fi, qi))
+
+    # Greedy 1:1 matching: sort by distance, assign closest pairs first
+    pairs.sort()
+    assigned_fixtures: set[int] = set()
+    assigned_qtys: set[int] = set()
+    result: dict[int, int] = {}
+
+    for dist, fi, qi in pairs:
+        if fi in assigned_fixtures or qi in assigned_qtys:
+            continue
+        result[fi] = qty_tags[qi][1]
+        assigned_fixtures.add(fi)
+        assigned_qtys.add(qi)
+
+    return result
 
 
 def count_fixtures_tiled(
@@ -282,11 +318,20 @@ def count_fixtures_tiled(
 
     # ── Step 2: Tile and OCR ──
     tile_count = 0
+    skipped_blank = 0
     y = 0
     while y + patch_size <= img_h:
         x = 0
         while x + patch_size <= img_w:
             tile = img[y:y + patch_size, x:x + patch_size]
+
+            # Skip completely blank tiles (>99% near-white pixels) — performance win
+            gray_tile = cv2.cvtColor(tile, cv2.COLOR_BGR2GRAY) if len(tile.shape) == 3 else tile
+            white_ratio = np.mean(gray_tile > 250)
+            if white_ratio > 0.99:
+                skipped_blank += 1
+                x += step
+                continue
 
             # OCR this tile
             result = ocr.ocr(tile, cls=True)
@@ -300,7 +345,8 @@ def count_fixtures_tiled(
                         tile_texts.append((points, text, conf))
                         all_raw_texts.append(text)
 
-                # Extract fixture codes from this tile
+                # Extract fixture codes from this tile (two-pass for 1:1 QTY matching)
+                tile_fixtures: list[tuple[str, list[float], str, float]] = []
                 for points, text, conf in tile_texts:
                     local_bbox = _bbox_from_points(points)
                     codes = FIXTURE_CODE_RE.findall(text)
@@ -308,46 +354,40 @@ def count_fixtures_tiled(
                     for code in codes:
                         if not _is_fixture_code(code):
                             continue
+                        tile_fixtures.append((code, local_bbox, text, conf))
 
-                        # Map local bbox to page coordinates
-                        page_bbox = [
-                            local_bbox[0] + x,
-                            local_bbox[1] + y,
-                            local_bbox[2] + x,
-                            local_bbox[3] + y,
-                        ]
+                # 1:1 nearest-neighbor QTY assignment for this tile
+                qty_tags = _find_qty_tags_in_tile(tile_texts)
+                fixture_bboxes = [(code, bbox) for code, bbox, _text, _conf in tile_fixtures]
+                qty_map = _assign_qty_1to1(fixture_bboxes, qty_tags, search_radius)
 
-                        qty = _find_nearby_quantity_in_tile(local_bbox, tile_texts, search_radius)
+                for fi, (code, local_bbox, text, conf) in enumerate(tile_fixtures):
+                    page_bbox = [
+                        local_bbox[0] + x,
+                        local_bbox[1] + y,
+                        local_bbox[2] + x,
+                        local_bbox[3] + y,
+                    ]
+                    qty = qty_map.get(fi, 1)
 
-                        all_occurrences.append(FixtureOccurrence(
-                            code=code,
-                            quantity=qty if qty else 1,
-                            bbox=page_bbox,
-                            raw_text=text,
-                            confidence=conf,
-                            source="plan",
-                        ))
+                    all_occurrences.append(FixtureOccurrence(
+                        code=code,
+                        quantity=qty,
+                        bbox=page_bbox,
+                        raw_text=text,
+                        confidence=conf,
+                        source="plan",
+                    ))
 
-            # ── Step 3: Fan detection on this tile ──
-            if detect_fans:
-                from rcp_detector.detection.fan_detector import detect_ceiling_fans
-                fans = detect_ceiling_fans(
-                    tile,
-                    min_radius=fan_min_radius,
-                    max_radius=fan_max_radius,
-                    min_blade_lines=4,
-                    hough_param2=30,
-                )
-                for fan in fans:
-                    fan["center_x"] += x  # map to page coords
-                    fan["center_y"] += y
-                    fan_detections.append(fan)
+            # Note: Fan detection moved to Step 6 — template matching on full page
+            # is much more accurate than per-tile Hough circles.
 
             tile_count += 1
             x += step
         y += step
 
-    logger.info("OCR scanned %d tiles, found %d raw occurrences", tile_count, len(all_occurrences))
+    logger.info("OCR scanned %d tiles (%d blank skipped), found %d raw occurrences",
+                tile_count, skipped_blank, len(all_occurrences))
 
     # ── Step 4: Filter partial reads ──
     all_occurrences = _filter_partial_reads(all_occurrences)
@@ -356,9 +396,22 @@ def count_fixtures_tiled(
     deduped = _spatial_dedup(all_occurrences, iou_threshold=dedup_iou, center_dist_threshold=dedup_dist)
     logger.info("After dedup: %d unique occurrences (was %d)", len(deduped), len(all_occurrences))
 
-    # ── Step 6: Fan dedup ──
+    # ── Step 6: Fan detection (template-based on full page, or Hough per-tile) ──
     fan_count = 0
-    if fan_detections:
+    if detect_fans:
+        try:
+            from rcp_detector.detection.template_fan_detector import detect_fans_template
+            template_fans = detect_fans_template(img, threshold=0.80)
+            fan_count = len(template_fans)
+            logger.info("Template fan detection: %d fans found", fan_count)
+        except Exception as e:
+            logger.warning("Template fan detection failed (%s), falling back to Hough", e)
+            if fan_detections:
+                from rcp_detector.detection.fan_detector import dedup_fan_detections
+                unique_fans = dedup_fan_detections(fan_detections, merge_radius=fan_max_radius * 4)
+                fan_count = len(unique_fans)
+                logger.info("Hough fan detection fallback: %d fans", fan_count)
+    elif fan_detections:
         from rcp_detector.detection.fan_detector import dedup_fan_detections
         unique_fans = dedup_fan_detections(fan_detections, merge_radius=fan_max_radius * 4)
         fan_count = len(unique_fans)
@@ -485,6 +538,64 @@ def count_fixtures_ocr(
 # ── Pipeline entry point ─────────────────────────────────────────────────────
 
 
+def _extract_schedule_from_page(
+    image_path: str | Path,
+    lang: str = "en",
+) -> dict[str, str]:
+    """OCR an entire page and extract fixture schedule entries.
+
+    Used for dedicated schedule pages in multi-page PDFs. Scans the full page
+    for lines matching 'CODE  description' patterns, not just the margin regions.
+    """
+    image_path = Path(image_path)
+    ocr = _get_ocr(lang)
+    schedule: dict[str, str] = {}
+
+    result = ocr.ocr(str(image_path), cls=True)
+    if not result or not result[0]:
+        return schedule
+
+    for line in result[0]:
+        text = line[1][0]
+        match = SCHEDULE_LINE_RE.search(text)
+        if match:
+            code = match.group(1)
+            desc = match.group(2).strip()
+            if _is_fixture_code(code) and len(desc) > 2:
+                schedule[code] = desc
+
+    if schedule:
+        logger.info("Schedule page extracted %d entries: %s", len(schedule), list(schedule.keys()))
+
+    return schedule
+
+
+def _is_schedule_page(image_path: str | Path, lang: str = "en") -> bool:
+    """Heuristic: a page is a schedule page if it contains keywords like
+    'FIXTURE SCHEDULE', 'LIGHTING SCHEDULE', or a high density of fixture codes
+    without drawing geometry.
+    """
+    ocr = _get_ocr(lang)
+    result = ocr.ocr(str(image_path), cls=True)
+    if not result or not result[0]:
+        return False
+
+    all_text = " ".join(line[1][0] for line in result[0]).upper()
+    schedule_keywords = ["FIXTURE SCHEDULE", "LIGHTING SCHEDULE", "LIGHT FIXTURE SCHEDULE",
+                         "CEILING FIXTURE", "FIXTURE TYPE", "LAMP TYPE"]
+
+    for kw in schedule_keywords:
+        if kw in all_text:
+            return True
+
+    # High fixture-code density with descriptions also suggests a schedule
+    fixture_matches = FIXTURE_CODE_RE.findall(all_text)
+    if len(fixture_matches) > 10:
+        return True
+
+    return False
+
+
 def count_fixtures_from_pdf(
     pdf_path: str | Path,
     pages_dir: str | Path | None = None,
@@ -496,8 +607,12 @@ def count_fixtures_from_pdf(
 ) -> list[FixtureCountResult]:
     """Full pipeline: PDF → PNG → OCR → fixture counts.
 
+    Renders ALL pages of the PDF. Plan pages get full tiled OCR + fan detection.
+    Schedule pages are parsed for fixture code/description tables and merged
+    into plan results.
+
     Set *use_tiling=True* (default) for spatial-dedup tile-based counting.
-    Set *detect_fans=True* to include Hough circle ceiling fan detection.
+    Set *detect_fans=True* to include template-based ceiling fan detection.
     """
     pdf_path = Path(pdf_path)
 
@@ -509,12 +624,38 @@ def count_fixtures_from_pdf(
         pages_dir = Path("output") / pdf_path.stem / "pages"
         image_paths = pdf_to_pngs(pdf_path, pages_dir, dpi=dpi)
 
-    results = []
+    # Two-pass: identify schedule pages first, then process plan pages
+    schedule_entries: dict[str, str] = {}
+    plan_pages: list[Path] = []
+
     for img_path in image_paths:
+        if len(image_paths) > 1 and _is_schedule_page(img_path, lang):
+            logger.info("Detected schedule page: %s", img_path.name)
+            page_schedule = _extract_schedule_from_page(img_path, lang)
+            schedule_entries.update(page_schedule)
+        else:
+            plan_pages.append(img_path)
+
+    if schedule_entries:
+        logger.info("Multi-page schedule: %d fixture descriptions extracted", len(schedule_entries))
+
+    results = []
+    for img_path in plan_pages:
         if use_tiling:
             result = count_fixtures_tiled(img_path, detect_fans=detect_fans, lang=lang, **kwargs)
         else:
             result = count_fixtures_ocr(img_path, lang=lang)
+
+        # Merge schedule entries from dedicated schedule pages
+        if schedule_entries:
+            result.schedule_entries.update(schedule_entries)
+            # Add schedule-only codes (not yet counted) with count 0
+            for code in schedule_entries:
+                if code not in result.fixture_counts:
+                    fixture_prefixes = ("L-", "CF-", "F-", "S-", "E-", "EL-", "EM-", "SP-")
+                    if code.startswith(fixture_prefixes):
+                        result.fixture_counts[code] = 0
+
         results.append(result)
 
     return results
@@ -558,7 +699,7 @@ def format_results_markdown(results: list[FixtureCountResult]) -> str:
             lines.append("| Source | Count |")
             lines.append("|--------|------:|")
             for code, count in sorted(fans.items()):
-                label = "Visual detection (Hough)" if code == "CEILING_FAN" else code
+                label = "Visual detection (template)" if code == "CEILING_FAN" else code
                 lines.append(f"| {label} | {count} |")
             lines.append(f"| **Subtotal** | **{sum(fans.values())}** | |")
             lines.append("")
