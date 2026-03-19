@@ -30,6 +30,12 @@ ocr:
   fixture_code_pattern: '[A-Z]-\d{3}[A-Z]?'
   quantity_pattern: 'QTY\s*\d+'
   lang: "en"
+  use_tiling: true           # tile-based OCR with spatial dedup (recommended)
+  dedup_iou_threshold: 0.3   # IoU threshold for spatial dedup
+  dedup_dist_threshold: 40   # center distance (px) for dedup of small text
+  detect_fans: true          # Hough circle ceiling fan detection
+  fan_min_radius: 8          # min fan symbol radius in pixels (at 300 DPI)
+  fan_max_radius: 25         # max fan symbol radius in pixels (at 300 DPI)
 
 # Training
 training:

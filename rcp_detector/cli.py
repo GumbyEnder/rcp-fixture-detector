@@ -284,13 +284,16 @@ def stats(labels_dir, classes_file):
 @cli.command("ocr-count")
 @click.argument("source", type=click.Path(exists=True))
 @click.option("--output", "-o", default=None, help="Output markdown file path")
-@click.option("--dpi", default=300, type=int, help="PDF render DPI")
-@click.option("--radius", default=300, type=float, help="OCR search radius for QTY tags (pixels)")
+@click.option("--dpi", default=300, type=int, help="PDF render DPI (300-600)")
+@click.option("--no-tiling", is_flag=True, help="Use full-page OCR instead of tile-based")
+@click.option("--no-fans", is_flag=True, help="Skip ceiling fan detection")
+@click.option("--dedup-dist", default=40.0, type=float, help="Center distance threshold for dedup (px)")
 @click.pass_context
-def ocr_count(ctx, source, output, dpi, radius):
-    """OCR-based fixture counting — extract fixture codes and quantities from text."""
-    from rcp_detector.ocr.fixture_counter import count_fixtures_from_pdf, count_fixtures_ocr, format_results_markdown
-    from rcp_detector.pdf.converter import pdf_to_pngs
+def ocr_count(ctx, source, output, dpi, no_tiling, no_fans, dedup_dist):
+    """OCR-based fixture counting with spatial dedup and fan detection."""
+    from rcp_detector.ocr.fixture_counter import (
+        count_fixtures_from_pdf, count_fixtures_ocr, count_fixtures_tiled, format_results_markdown,
+    )
 
     source = Path(source)
     all_results = []
@@ -300,24 +303,35 @@ def ocr_count(ctx, source, output, dpi, radius):
     else:
         sources = [source]
 
-    for src in sources:
+    for src in tqdm(sources, desc="OCR counting", unit="file"):
         if src.suffix.lower() == ".pdf":
-            results = count_fixtures_from_pdf(src, dpi=dpi, lang="en", search_radius=radius)
+            results = count_fixtures_from_pdf(
+                src, dpi=dpi, lang="en",
+                use_tiling=not no_tiling,
+                detect_fans=not no_fans,
+                dedup_dist=dedup_dist,
+            )
             all_results.extend(results)
         elif src.suffix.lower() == ".png":
-            result = count_fixtures_ocr(src, lang="en", search_radius=radius)
+            if no_tiling:
+                result = count_fixtures_ocr(src, lang="en")
+            else:
+                result = count_fixtures_tiled(
+                    src, lang="en",
+                    detect_fans=not no_fans,
+                    dedup_dist=dedup_dist,
+                )
             all_results.append(result)
 
-    # Format and output
     md = format_results_markdown(all_results)
     click.echo(md)
 
     if output:
         Path(output).parent.mkdir(parents=True, exist_ok=True)
         with open(output, "w") as f:
-            f.write(f"# RCP Fixture Count — OCR Results\n\n")
-            f.write(f"**Date:** 2026-03-19\n")
-            f.write(f"**Method:** PaddleOCR text extraction + regex fixture code matching\n\n")
+            f.write("# RCP Fixture Count — OCR Results\n\n")
+            f.write(f"**DPI:** {dpi} | **Tiling:** {'off' if no_tiling else 'on'} | ")
+            f.write(f"**Fan detection:** {'off' if no_fans else 'on'}\n\n")
             f.write(md)
         click.echo(f"\nSaved to {output}")
 
