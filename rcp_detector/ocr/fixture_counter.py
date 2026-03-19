@@ -289,7 +289,7 @@ def count_fixtures_tiled(
     patch_size: int = 640,
     overlap_factor: float = 0.5,
     lang: str = "en",
-    search_radius: float = 200,
+    search_radius: float = 350,
     dedup_iou: float = 0.3,
     dedup_dist: float = 40.0,
     detect_fans: bool = False,  # experimental — high FP rate on architectural drawings
@@ -341,7 +341,7 @@ def count_fixtures_tiled(
                     points = line[0]
                     text = line[1][0]
                     conf = line[1][1]
-                    if conf > 0.5:
+                    if conf > 0.4:
                         tile_texts.append((points, text, conf))
                         all_raw_texts.append(text)
 
