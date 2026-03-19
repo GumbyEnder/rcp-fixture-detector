@@ -278,5 +278,49 @@ def stats(labels_dir, classes_file):
     print_label_stats(counts)
 
 
+# ── ocr-count ────────────────────────────────────────────────────────────────
+
+
+@cli.command("ocr-count")
+@click.argument("source", type=click.Path(exists=True))
+@click.option("--output", "-o", default=None, help="Output markdown file path")
+@click.option("--dpi", default=300, type=int, help="PDF render DPI")
+@click.option("--radius", default=300, type=float, help="OCR search radius for QTY tags (pixels)")
+@click.pass_context
+def ocr_count(ctx, source, output, dpi, radius):
+    """OCR-based fixture counting — extract fixture codes and quantities from text."""
+    from rcp_detector.ocr.fixture_counter import count_fixtures_from_pdf, count_fixtures_ocr, format_results_markdown
+    from rcp_detector.pdf.converter import pdf_to_pngs
+
+    source = Path(source)
+    all_results = []
+
+    if source.is_dir():
+        sources = sorted(list(source.glob("*.pdf")) + list(source.glob("*.png")))
+    else:
+        sources = [source]
+
+    for src in sources:
+        if src.suffix.lower() == ".pdf":
+            results = count_fixtures_from_pdf(src, dpi=dpi, lang="en", search_radius=radius)
+            all_results.extend(results)
+        elif src.suffix.lower() == ".png":
+            result = count_fixtures_ocr(src, lang="en", search_radius=radius)
+            all_results.append(result)
+
+    # Format and output
+    md = format_results_markdown(all_results)
+    click.echo(md)
+
+    if output:
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        with open(output, "w") as f:
+            f.write(f"# RCP Fixture Count — OCR Results\n\n")
+            f.write(f"**Date:** 2026-03-19\n")
+            f.write(f"**Method:** PaddleOCR text extraction + regex fixture code matching\n\n")
+            f.write(md)
+        click.echo(f"\nSaved to {output}")
+
+
 if __name__ == "__main__":
     cli()
