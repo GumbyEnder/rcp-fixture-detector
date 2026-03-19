@@ -112,14 +112,29 @@ def _is_fixture_code(code: str) -> bool:
 def _filter_partial_reads(occurrences: list[FixtureOccurrence]) -> list[FixtureOccurrence]:
     """Remove fixture codes that are clearly truncated reads of longer codes.
 
-    E.g., if both L-10 and L-100 exist, drop L-10.
+    E.g., if both L-10 and L-100 exist, drop L-10 (partial digit read).
+
+    But L-100 is NOT a partial of L-100A — suffix letters indicate a distinct code.
+    Only filter when the longer code extends the numeric part, not when it adds
+    a letter suffix.
     """
     all_codes = {occ.code for occ in occurrences}
 
     def is_partial(code: str) -> bool:
         for other in all_codes:
-            if other != code and other.startswith(code) and len(other) > len(code):
+            if other == code:
+                continue
+            if not other.startswith(code):
+                continue
+            if len(other) <= len(code):
+                continue
+            # The extra characters after `code` — if they're digits, it's a partial
+            # digit read (L-10 → L-100). If they're letters, it's a variant suffix
+            # (L-100 → L-100A) and the shorter code is legitimate.
+            suffix = other[len(code):]
+            if suffix[0].isdigit():
                 return True
+            # suffix starts with a letter → code is a real base code, not partial
         return False
 
     partial_codes = {c for c in all_codes if is_partial(c)}
@@ -295,6 +310,7 @@ def count_fixtures_tiled(
     detect_fans: bool = False,  # experimental — high FP rate on architectural drawings
     fan_min_radius: int = 8,
     fan_max_radius: int = 25,
+    dpi: int = 300,
 ) -> FixtureCountResult:
     """Tile-based OCR with spatial dedup, partial read filtering, and fan detection.
 
@@ -401,7 +417,8 @@ def count_fixtures_tiled(
     if detect_fans:
         try:
             from rcp_detector.detection.template_fan_detector import detect_fans_template
-            template_fans = detect_fans_template(img, threshold=0.80)
+            nms = int(100 * dpi / 300)  # scale NMS distance with DPI
+            template_fans = detect_fans_template(img, threshold=0.80, dpi=dpi, nms_dist=nms)
             fan_count = len(template_fans)
             logger.info("Template fan detection: %d fans found", fan_count)
         except Exception as e:
@@ -433,11 +450,16 @@ def count_fixtures_tiled(
             fixture_counts[code] = 0
 
     # Filter out non-fixture codes (P-*, WC-*, etc.) unless they're in the schedule
-    fixture_prefixes = ("L-", "CF-", "F-", "S-", "E-", "EL-", "EM-", "SP-")
+    fixture_prefixes = ("L-", "CF-", "S-", "E-", "EL-", "EM-", "SP-")
+    # F- codes only kept if they appear in the schedule (avoids P-100 → F-100 misreads)
     filtered_counts = {}
     for code, count in fixture_counts.items():
         if code == "CEILING_FAN" or code.startswith(fixture_prefixes) or code in schedule:
             filtered_counts[code] = count
+        elif code.startswith("F-") and code in schedule:
+            filtered_counts[code] = count
+
+
 
     result = FixtureCountResult(
         page_name=image_path.stem,
@@ -642,7 +664,7 @@ def count_fixtures_from_pdf(
     results = []
     for img_path in plan_pages:
         if use_tiling:
-            result = count_fixtures_tiled(img_path, detect_fans=detect_fans, lang=lang, **kwargs)
+            result = count_fixtures_tiled(img_path, detect_fans=detect_fans, lang=lang, dpi=dpi, **kwargs)
         else:
             result = count_fixtures_ocr(img_path, lang=lang)
 

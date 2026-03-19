@@ -2,7 +2,7 @@
 
 # PDF rendering
 pdf:
-  dpi: 300
+  dpi: 400  # 400 DPI catches smaller text that 300 misses (L-100, etc.)
   colorspace: "rgb"  # rgb or gray
 
 # Tiling

@@ -24,18 +24,21 @@ _DEFAULT_TEMPLATE = _TEMPLATE_DIR / "ceiling_fan.png"
 def detect_fans_template(
     image: np.ndarray,
     template_path: str | Path | None = None,
-    scales: tuple[float, ...] = (0.85, 1.0, 1.15),
+    scales: tuple[float, ...] | None = None,
     threshold: float = 0.65,
     nms_dist: float = 100,
+    dpi: int = 300,
 ) -> list[dict]:
     """Detect ceiling fan symbols via multi-scale template matching.
 
     Args:
         image: Full-page image (BGR or grayscale).
         template_path: Path to grayscale fan template PNG. Uses built-in if None.
-        scales: Template scale factors to try (handles slight size variation).
+        scales: Template scale factors to try. If None, auto-computed from DPI
+                (template was created at 300 DPI).
         threshold: Minimum TM_CCOEFF_NORMED score to count as a match.
         nms_dist: Minimum center-to-center distance (px) to keep both detections.
+        dpi: Rendering DPI of the image (used to scale template if scales is None).
 
     Returns:
         List of dicts with keys: center_x, center_y, width, height, confidence, scale.
@@ -58,6 +61,12 @@ def detect_fans_template(
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
         gray = image
+
+    # Auto-compute scales based on DPI (template was captured at 300 DPI)
+    if scales is None:
+        dpi_ratio = dpi / 300.0
+        scales = (dpi_ratio * 0.85, dpi_ratio * 1.0, dpi_ratio * 1.15)
+        logger.debug("Auto-scaled template for %d DPI: scales=%s", dpi, scales)
 
     raw_matches: list[tuple[int, int, int, int, float, float]] = []
 
