@@ -1,0 +1,53 @@
+# RCP Fixture Detector — Default Configuration
+
+# PDF rendering
+pdf:
+  dpi: 300
+  colorspace: "rgb"  # rgb or gray
+
+# Tiling
+tiling:
+  patch_width: 640
+  patch_height: 640
+  overlap_factor: 0.5
+
+# Detection
+detection:
+  model_path: "yolov8l.pt"
+  confidence_threshold: 0.25
+  iou_threshold: 0.45
+  device: ""  # "" = auto (CUDA if available), "cpu", or "0", "0,1" etc.
+  batch_size: 16
+  imgsz: 640
+
+# NMS (post-reconstruction)
+nms:
+  overlap_threshold: 0.3
+
+# OCR
+ocr:
+  expand_ratio: 2.5          # bbox expansion multiplier for text capture
+  fixture_code_pattern: '[A-Z]-\d{3}[A-Z]?'
+  quantity_pattern: 'QTY\s*\d+'
+  lang: "en"
+
+# Training
+training:
+  epochs: 100
+  batch_size: 16
+  imgsz: 640
+  patience: 20
+  optimizer: "auto"
+  lr0: 0.01
+  augment: true
+
+# Output
+output:
+  format: "json"  # json or csv
+  save_visualizations: true
+  visualization_line_width: 2
+
+# Batch processing
+batch:
+  max_workers: 4  # for PDF rendering parallelism
+  skip_errors: true

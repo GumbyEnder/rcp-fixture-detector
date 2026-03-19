@@ -1,0 +1,48 @@
+# RCP Fixture Classes — YOLO Dataset Configuration
+# 15 fixture classes for Reflected Ceiling Plan detection
+
+path: ./datasets/rcp  # dataset root dir (relative to where training is run)
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 15
+
+names:
+  0: RECESSED_DOWNLIGHT
+  1: SURFACE_LIGHT
+  2: LINEAR_LIGHT
+  3: CYLINDER_DOWNLIGHT
+  4: STRIP_LIGHT
+  5: SQUARE_DOWNLIGHT
+  6: EXIT_SIGN
+  7: CEILING_FAN
+  8: SMOKE_DETECTOR
+  9: SPRINKLER_HEAD
+  10: SPEAKER
+  11: HVAC_DIFFUSER
+  12: HVAC_REGISTER
+  13: EMERGENCY_LIGHT
+  14: UNKNOWN_FIXTURE
+
+# Mapping from original 30-class dataset to RCP 15-class dataset
+# original_index: new_index
+# 10 classes map directly from the original set:
+class_mapping:
+  1: 0    # LIGHT FIXTURE RECESSED -> RECESSED_DOWNLIGHT
+  2: 1    # LIGHT FIXTURE SURFACE -> SURFACE_LIGHT
+  6: 2    # THIN LIGHT FIXTURE -> LINEAR_LIGHT
+  9: 3    # CYLINDER LIGHT FIXTURE -> CYLINDER_DOWNLIGHT
+  19: 4   # 1X4 STRIP LIGHT FIXTURE -> STRIP_LIGHT
+  22: 5   # SQUARE APERTURE DOWNLIGHT -> SQUARE_DOWNLIGHT
+  11: 6   # EXIT SIGN -> EXIT_SIGN
+  24: 8   # FIRE ALARM SYSTEM- CELING SMOKE DETECTOR -> SMOKE_DETECTOR
+  28: 10  # FLUSH IN CEILING MOUNTED SPEAKER WITH BACKBOX -> SPEAKER
+  8: 13   # EMERGENCY NIGHT LIGHT -> EMERGENCY_LIGHT
+
+# 5 new classes (no mapping from original):
+# 7: CEILING_FAN          — new
+# 9: SPRINKLER_HEAD       — new
+# 11: HVAC_DIFFUSER       — new
+# 12: HVAC_REGISTER       — new
+# 14: UNKNOWN_FIXTURE     — new
