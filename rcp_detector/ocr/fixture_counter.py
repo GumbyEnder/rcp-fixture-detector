@@ -13,10 +13,12 @@ import re
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 import cv2
 import numpy as np
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +30,27 @@ def _get_ocr(lang: str = "en"):
     global _ocr_instance
     if _ocr_instance is None:
         from paddleocr import PaddleOCR
-        _ocr_instance = PaddleOCR(use_angle_cls=True, lang=lang, show_log=False)
+        _ocr_instance = PaddleOCR(use_angle_cls=True, lang=lang)
     return _ocr_instance
+
+
+@lru_cache(maxsize=128)
+def _ocr_page_result(image_path: str, lang: str = "en"):
+    return _get_ocr(lang).ocr(str(image_path))
+
+
+def _parse_schedule_entries(lines) -> dict[str, str]:
+    schedule: dict[str, str] = {}
+    for line in lines or []:
+        payload = line[1]
+        text = payload[0] if isinstance(payload, (list, tuple)) else payload
+        match = SCHEDULE_LINE_RE.search(text)
+        if match:
+            code = match.group(1)
+            desc = match.group(2).strip()
+            if _is_fixture_code(code) and len(desc) > 2:
+                schedule[code] = desc
+    return schedule
 
 
 # ── Regex patterns ───────────────────────────────────────────────────────────
@@ -64,6 +85,7 @@ class FixtureCountResult:
     occurrences: list = field(default_factory=list)
     fan_count: int = 0
     all_ocr_texts: list = field(default_factory=list)
+    metrics: dict = field(default_factory=dict)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -211,19 +233,11 @@ def _extract_schedule(
         if crop.size == 0:
             continue
 
-        result = ocr.ocr(crop, cls=True)
+        result = ocr.ocr(crop)
         if not result or not result[0]:
             continue
 
-        # Collect all text in this region and look for schedule lines
-        for line in result[0]:
-            text = line[1][0]
-            match = SCHEDULE_LINE_RE.search(text)
-            if match:
-                code = match.group(1)
-                desc = match.group(2).strip()
-                if _is_fixture_code(code) and len(desc) > 2:
-                    schedule[code] = desc
+        schedule.update(_parse_schedule_entries(result[0]))
 
     if schedule:
         logger.info("Schedule entries found: %s", list(schedule.keys()))
@@ -324,13 +338,17 @@ def count_fixtures_tiled(
     img_h, img_w = img.shape[:2]
     ocr = _get_ocr(lang)
 
-    step = int(patch_size * (1 - overlap_factor))
+    step = max(1, int(patch_size * (1 - overlap_factor)))
     all_raw_texts: list[str] = []
     all_occurrences: list[FixtureOccurrence] = []
     fan_detections: list[dict] = []
+    started = time.monotonic()
+    logger.info("%s: starting tiled OCR (%dx%d px, patch=%d, overlap=%.0f%%)", image_path.name, img_w, img_h, patch_size, overlap_factor * 100)
 
     # ── Step 1: Extract schedule from legend area first ──
+    schedule_start = time.monotonic()
     schedule = _extract_schedule(img, lang)
+    logger.info("%s: schedule extraction finished in %.1fs (%d entries)", image_path.name, time.monotonic() - schedule_start, len(schedule))
 
     # ── Step 2: Tile and OCR ──
     tile_count = 0
@@ -350,7 +368,7 @@ def count_fixtures_tiled(
                 continue
 
             # OCR this tile
-            result = ocr.ocr(tile, cls=True)
+            result = ocr.ocr(tile)
             if result and result[0]:
                 tile_texts: list[tuple[list, str, float]] = []
                 for line in result[0]:
@@ -404,6 +422,8 @@ def count_fixtures_tiled(
 
     logger.info("OCR scanned %d tiles (%d blank skipped), found %d raw occurrences",
                 tile_count, skipped_blank, len(all_occurrences))
+
+    raw_occurrence_count = len(all_occurrences)
 
     # ── Step 4: Filter partial reads ──
     all_occurrences = _filter_partial_reads(all_occurrences)
@@ -461,6 +481,7 @@ def count_fixtures_tiled(
 
 
 
+    elapsed = time.monotonic() - started
     result = FixtureCountResult(
         page_name=image_path.stem,
         fixture_counts=filtered_counts,
@@ -468,11 +489,21 @@ def count_fixtures_tiled(
         occurrences=deduped,
         fan_count=fan_count,
         all_ocr_texts=all_raw_texts,
+        metrics={
+            "elapsed_s": round(elapsed, 3),
+            "tile_count": tile_count,
+            "blank_tiles_skipped": skipped_blank,
+            "raw_ocr_texts": len(all_raw_texts),
+            "raw_occurrences": raw_occurrence_count,
+            "deduped_occurrences": len(deduped),
+            "schedule_entries": len(schedule),
+            "fans": fan_count,
+        },
     )
 
     total = sum(filtered_counts.values())
-    logger.info("%s: %d fixture types, %d total count, %d fans",
-                image_path.stem, len(filtered_counts), total, fan_count)
+    logger.info("%s: %d fixture types, %d total count, %d fans in %.1fs",
+                image_path.stem, len(filtered_counts), total, fan_count, elapsed)
     for code, count in sorted(filtered_counts.items()):
         desc = schedule.get(code, "")
         logger.info("  %s: %d%s", code, count, f" — {desc}" if desc else "")
@@ -492,9 +523,10 @@ def count_fixtures_ocr(
     image_path = Path(image_path)
     ocr = _get_ocr(lang)
 
-    result = ocr.ocr(str(image_path), cls=True)
+    started = time.monotonic()
+    result = _ocr_page_result(str(image_path), lang)
     if not result or not result[0]:
-        return FixtureCountResult(page_name=image_path.stem)
+        return FixtureCountResult(page_name=image_path.stem, metrics={"elapsed_s": round(time.monotonic() - started, 3)})
 
     all_texts: list[tuple[list, str, float]] = []
     all_raw: list[str] = []
@@ -554,6 +586,12 @@ def count_fixtures_ocr(
         schedule_entries=schedule_entries,
         occurrences=occurrences,
         all_ocr_texts=all_raw,
+        metrics={
+            "elapsed_s": round(time.monotonic() - started, 3),
+            "ocr_lines": len(all_texts),
+            "occurrences": len(occurrences),
+            "schedule_entries": len(schedule_entries),
+        },
     )
 
 
@@ -573,18 +611,11 @@ def _extract_schedule_from_page(
     ocr = _get_ocr(lang)
     schedule: dict[str, str] = {}
 
-    result = ocr.ocr(str(image_path), cls=True)
+    result = _ocr_page_result(str(image_path), lang)
     if not result or not result[0]:
         return schedule
 
-    for line in result[0]:
-        text = line[1][0]
-        match = SCHEDULE_LINE_RE.search(text)
-        if match:
-            code = match.group(1)
-            desc = match.group(2).strip()
-            if _is_fixture_code(code) and len(desc) > 2:
-                schedule[code] = desc
+    schedule.update(_parse_schedule_entries(result[0]))
 
     if schedule:
         logger.info("Schedule page extracted %d entries: %s", len(schedule), list(schedule.keys()))
@@ -598,7 +629,7 @@ def _is_schedule_page(image_path: str | Path, lang: str = "en") -> bool:
     without drawing geometry.
     """
     ocr = _get_ocr(lang)
-    result = ocr.ocr(str(image_path), cls=True)
+    result = _ocr_page_result(str(image_path), lang)
     if not result or not result[0]:
         return False
 
@@ -646,40 +677,51 @@ def count_fixtures_from_pdf(
         pages_dir = Path("output") / pdf_path.stem / "pages"
         image_paths = pdf_to_pngs(pdf_path, pages_dir, dpi=dpi)
 
+    total_pages = len(image_paths)
+    started = time.monotonic()
+    logger.info("Starting OCR pass for %d pages from %s", total_pages, pdf_path.name)
+
     # Two-pass: identify schedule pages first, then process plan pages
     schedule_entries: dict[str, str] = {}
-    plan_pages: list[Path] = []
+    plan_pages: list[tuple[int, Path]] = []
 
-    for img_path in image_paths:
-        if len(image_paths) > 1 and _is_schedule_page(img_path, lang):
-            logger.info("Detected schedule page: %s", img_path.name)
+    for page_num, img_path in enumerate(image_paths, start=1):
+        if total_pages > 1 and _is_schedule_page(img_path, lang):
+            logger.info("Detected schedule page %d/%d: %s", page_num, total_pages, img_path.name)
             page_schedule = _extract_schedule_from_page(img_path, lang)
             schedule_entries.update(page_schedule)
         else:
-            plan_pages.append(img_path)
+            plan_pages.append((page_num, img_path))
 
     if schedule_entries:
         logger.info("Multi-page schedule: %d fixture descriptions extracted", len(schedule_entries))
 
     results = []
-    for img_path in plan_pages:
+    for page_num, img_path in plan_pages:
+        page_started = time.monotonic()
+        logger.info("Page %d/%d start: %s", page_num, total_pages, img_path.name)
         if use_tiling:
             result = count_fixtures_tiled(img_path, detect_fans=detect_fans, lang=lang, dpi=dpi, **kwargs)
         else:
             result = count_fixtures_ocr(img_path, lang=lang)
 
-        # Merge schedule entries from dedicated schedule pages
         if schedule_entries:
             result.schedule_entries.update(schedule_entries)
-            # Add schedule-only codes (not yet counted) with count 0
             for code in schedule_entries:
                 if code not in result.fixture_counts:
                     fixture_prefixes = ("L-", "CF-", "F-", "S-", "E-", "EL-", "EM-", "SP-")
                     if code.startswith(fixture_prefixes):
                         result.fixture_counts[code] = 0
 
+        result.metrics.update({
+            "page_num": page_num,
+            "page_total": total_pages,
+            "page_elapsed_s": round(time.monotonic() - page_started, 3),
+        })
         results.append(result)
+        logger.info("Page %d/%d complete in %.1fs: %d types, %d total, %d fans", page_num, total_pages, result.metrics["page_elapsed_s"], len(result.fixture_counts), sum(result.fixture_counts.values()), result.fan_count)
 
+    logger.info("Completed OCR pass for %d pages in %.1fs", len(results), time.monotonic() - started)
     return results
 
 

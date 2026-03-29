@@ -1,7 +1,3 @@
-"""Click CLI entry point for rcp-detect."""
-
-import json
-import logging
 import sys
 import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -17,6 +13,22 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger("rcp_detector")
+
+
+def _configure_run_log(log_path: Path | None) -> None:
+    if log_path is None:
+        return
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    root = logging.getLogger()
+    abs_path = str(log_path.resolve())
+    for handler in root.handlers:
+        if isinstance(handler, logging.FileHandler) and getattr(handler, 'baseFilename', None) == abs_path:
+            return
+    file_handler = logging.FileHandler(log_path, mode="w")
+    file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root.addHandler(file_handler)
+    logger.info("Writing detailed run log to %s", log_path)
 
 
 @click.group()
@@ -284,13 +296,15 @@ def stats(labels_dir, classes_file):
 @cli.command("ocr-count")
 @click.argument("source", type=click.Path(exists=True))
 @click.option("--output", "-o", default=None, help="Output markdown file path")
+@click.option("--log-file", default=None, help="Detailed run log file path")
 @click.option("--dpi", default=300, type=int, help="PDF render DPI (300-600)")
 @click.option("--no-tiling", is_flag=True, help="Use full-page OCR instead of tile-based")
 @click.option("--no-fans", is_flag=True, help="Skip ceiling fan detection")
 @click.option("--dedup-dist", default=40.0, type=float, help="Center distance threshold for dedup (px)")
 @click.pass_context
-def ocr_count(ctx, source, output, dpi, no_tiling, no_fans, dedup_dist):
+def ocr_count(ctx, source, output, log_file, dpi, no_tiling, no_fans, dedup_dist):
     """OCR-based fixture counting with spatial dedup and fan detection."""
+
     from rcp_detector.ocr.fixture_counter import (
         count_fixtures_from_pdf, count_fixtures_ocr, count_fixtures_tiled, format_results_markdown,
     )
@@ -302,6 +316,12 @@ def ocr_count(ctx, source, output, dpi, no_tiling, no_fans, dedup_dist):
         sources = sorted(list(source.glob("*.pdf")) + list(source.glob("*.png")))
     else:
         sources = [source]
+
+    default_log = Path(log_file) if log_file else (
+        Path(output).with_suffix(".log") if output else (source.with_suffix(".log") if source.is_file() else Path("ocr-count.log"))
+    )
+    _configure_run_log(default_log)
+    logger.info("OCR count inputs: %d source(s)", len(sources))
 
     for src in tqdm(sources, desc="OCR counting", unit="file"):
         if src.suffix.lower() == ".pdf":

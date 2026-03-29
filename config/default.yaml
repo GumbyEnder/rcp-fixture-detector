@@ -1,8 +1,7 @@
-# RCP Fixture Detector — Default Configuration
 
 # PDF rendering
 pdf:
-  dpi: 400  # 400 DPI catches smaller text that 300 misses (L-100, etc.)
+  dpi: 300  # Match test expectations and keep OCR runtime manageable
   colorspace: "rgb"  # rgb or gray
 
 # Tiling

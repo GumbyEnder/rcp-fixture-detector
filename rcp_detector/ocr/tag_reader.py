@@ -17,7 +17,7 @@ def _get_ocr(lang: str = "en"):
     global _ocr_instance
     if _ocr_instance is None:
         from paddleocr import PaddleOCR
-        _ocr_instance = PaddleOCR(use_angle_cls=True, lang=lang, show_log=False)
+        _ocr_instance = PaddleOCR(use_angle_cls=True, lang=lang)
     return _ocr_instance
 
 
@@ -64,7 +64,7 @@ def read_fixture_tags(
             enriched.append(det)
             continue
 
-        result = ocr.ocr(crop, cls=True)
+        result = ocr.ocr(crop)
         texts = []
         if result and result[0]:
             texts = [line[1][0] for line in result[0]]
