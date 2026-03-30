@@ -356,9 +356,6 @@ def ocr_count(ctx, source, output, log_file, dpi, no_tiling, no_fans, dedup_dist
     if output:
         Path(output).parent.mkdir(parents=True, exist_ok=True)
         with open(output, "w") as f:
-            f.write("# RCP Fixture Count — OCR Results\n\n")
-            f.write(f"**DPI:** {dpi} | **Tiling:** {'off' if no_tiling else 'on'} | ")
-            f.write(f"**Fan detection:** {'off' if no_fans else 'on'}\n\n")
             f.write(md)
         click.echo(f"\nSaved to {output}")
 

@@ -1,6 +1,4 @@
-"""OCR-first fixture counter — extract fixture types and counts directly from RCP text.
-
-Improvements over v1:
+"""
 1. Tile-based OCR with spatial deduplication (fixes overlap inflation)
 2. Ceiling fan detection via Hough circles (Phase 2)
 3. Schedule table parsing from legend region
@@ -30,7 +28,7 @@ def _get_ocr(lang: str = "en"):
     global _ocr_instance
     if _ocr_instance is None:
         from paddleocr import PaddleOCR
-        _ocr_instance = PaddleOCR(use_angle_cls=True, lang=lang)
+        _ocr_instance = PaddleOCR(use_angle_cls=True, lang=lang, show_log=False)
     return _ocr_instance
 
 
@@ -313,6 +311,35 @@ def _assign_qty_1to1(
     return result
 
 
+def _find_nearby_quantity_in_tile(
+    fixture_bbox: list[float],
+    all_texts: list[tuple[list, str, float]],
+    search_radius: float = 300,
+) -> int:
+    """Find the nearest quantity tag to a fixture bbox in a full-page OCR result.
+
+    Used by the legacy full-page OCR path. Returns 0 if no nearby quantity is found.
+    """
+    qty_tags = _find_qty_tags_in_tile(all_texts)
+    if not qty_tags:
+        return 0
+
+    fcx = (fixture_bbox[0] + fixture_bbox[2]) / 2
+    fcy = (fixture_bbox[1] + fixture_bbox[3]) / 2
+    best_qty = 0
+    best_dist = None
+
+    for qbbox, qty in qty_tags:
+        qcx = (qbbox[0] + qbbox[2]) / 2
+        qcy = (qbbox[1] + qbbox[3]) / 2
+        dist = ((fcx - qcx) ** 2 + (fcy - qcy) ** 2) ** 0.5
+        if dist <= search_radius and (best_dist is None or dist < best_dist):
+            best_dist = dist
+            best_qty = qty
+
+    return best_qty
+
+
 def count_fixtures_tiled(
     image_path: str | Path,
     patch_size: int = 640,
@@ -491,6 +518,7 @@ def count_fixtures_tiled(
         all_ocr_texts=all_raw_texts,
         metrics={
             "elapsed_s": round(elapsed, 3),
+            "page_kind": "plan",
             "tile_count": tile_count,
             "blank_tiles_skipped": skipped_blank,
             "raw_ocr_texts": len(all_raw_texts),
@@ -623,30 +651,116 @@ def _extract_schedule_from_page(
     return schedule
 
 
-def _is_schedule_page(image_path: str | Path, lang: str = "en") -> bool:
-    """Heuristic: a page is a schedule page if it contains keywords like
-    'FIXTURE SCHEDULE', 'LIGHTING SCHEDULE', or a high density of fixture codes
-    without drawing geometry.
-    """
-    ocr = _get_ocr(lang)
-    result = _ocr_page_result(str(image_path), lang)
-    if not result or not result[0]:
+SCHEDULE_PAGE_KEYWORDS = (
+    "FIXTURE SCHEDULE",
+    "LIGHTING SCHEDULE",
+    "LIGHT FIXTURE SCHEDULE",
+    "CEILING FIXTURE",
+    "FIXTURE TYPE",
+    "LAMP TYPE",
+)
+DETAIL_PAGE_KEYWORDS = (
+    "DETAIL",
+    "SECTION",
+    "ELEVATION",
+    "TYPICAL",
+    "SCALE",
+)
+IRRELEVANT_PAGE_KEYWORDS = (
+    "COVER SHEET",
+    "TITLE SHEET",
+    "INDEX",
+    "TRANSMITTAL",
+    "NOT FOR CONSTRUCTION",
+)
+
+
+@lru_cache(maxsize=256)
+def _is_nearly_blank_image(image_path: str | Path, white_threshold: float = 0.995) -> bool:
+    """Fast pre-check used to skip obviously blank pages before OCR."""
+    img = cv2.imread(str(image_path))
+    if img is None:
         return False
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+    # Downsample to keep the pre-check cheap on high-res pages.
+    if gray.shape[0] > 1000 or gray.shape[1] > 1000:
+        gray = cv2.resize(gray, (max(1, gray.shape[1] // 4), max(1, gray.shape[0] // 4)))
+    white_ratio = float(np.mean(gray > 250))
+    return white_ratio >= white_threshold
 
-    all_text = " ".join(line[1][0] for line in result[0]).upper()
-    schedule_keywords = ["FIXTURE SCHEDULE", "LIGHTING SCHEDULE", "LIGHT FIXTURE SCHEDULE",
-                         "CEILING FIXTURE", "FIXTURE TYPE", "LAMP TYPE"]
 
-    for kw in schedule_keywords:
-        if kw in all_text:
-            return True
+def _classify_page_text(all_text: str, fixture_codes: list[str] | None = None) -> tuple[str, dict[str, int | str]]:
+    """Classify a page by OCR text before expensive counting work.
 
-    # High fixture-code density with descriptions also suggests a schedule
-    fixture_matches = FIXTURE_CODE_RE.findall(all_text)
-    if len(fixture_matches) > 10:
-        return True
+    Returns one of: plan, schedule, detail, irrelevant.
+    """
+    text = all_text.upper()
+    codes = fixture_codes if fixture_codes is not None else FIXTURE_CODE_RE.findall(text)
+    code_count = len(codes)
+    keyword_hits = sum(1 for kw in SCHEDULE_PAGE_KEYWORDS if kw in text)
+    detail_hits = sum(1 for kw in DETAIL_PAGE_KEYWORDS if kw in text)
+    irrelevant_hits = sum(1 for kw in IRRELEVANT_PAGE_KEYWORDS if kw in text)
+    word_count = len(re.findall(r"[A-Z0-9]+", text))
 
-    return False
+    if keyword_hits > 0 or code_count >= 10:
+        return "schedule", {
+            "reason": "schedule_keyword" if keyword_hits else "fixture_code_density",
+            "fixture_code_count": code_count,
+            "keyword_hits": keyword_hits,
+            "detail_hits": detail_hits,
+            "irrelevant_hits": irrelevant_hits,
+        }
+
+    if irrelevant_hits > 0 and code_count == 0:
+        return "irrelevant", {
+            "reason": "irrelevant_keyword",
+            "fixture_code_count": code_count,
+            "keyword_hits": keyword_hits,
+            "detail_hits": detail_hits,
+            "irrelevant_hits": irrelevant_hits,
+        }
+
+    if detail_hits > 0 and code_count == 0:
+        return "detail", {
+            "reason": "detail_keyword",
+            "fixture_code_count": code_count,
+            "keyword_hits": keyword_hits,
+            "detail_hits": detail_hits,
+            "irrelevant_hits": irrelevant_hits,
+        }
+
+    if code_count == 0 and word_count < 8:
+        return "irrelevant", {
+            "reason": "low_text_density",
+            "fixture_code_count": code_count,
+            "keyword_hits": keyword_hits,
+            "detail_hits": detail_hits,
+            "irrelevant_hits": irrelevant_hits,
+        }
+
+    return "plan", {
+        "reason": "default",
+        "fixture_code_count": code_count,
+        "keyword_hits": keyword_hits,
+        "detail_hits": detail_hits,
+        "irrelevant_hits": irrelevant_hits,
+    }
+
+
+
+def _classify_page_ocr(result: list) -> tuple[str, dict[str, int | str]]:
+    if not result or not result[0]:
+        return "irrelevant", {"reason": "empty_ocr", "fixture_code_count": 0, "keyword_hits": 0, "detail_hits": 0, "irrelevant_hits": 0}
+    all_text = " ".join(line[1][0] for line in result[0])
+    return _classify_page_text(all_text)
+
+
+
+def _is_schedule_page(image_path: str | Path, lang: str = "en") -> bool:
+    """Backward-compatible schedule-page check."""
+    result = _ocr_page_result(str(Path(image_path)), lang)
+    page_kind, _meta = _classify_page_ocr(result)
+    return page_kind == "schedule"
 
 
 def count_fixtures_from_pdf(
@@ -681,23 +795,61 @@ def count_fixtures_from_pdf(
     started = time.monotonic()
     logger.info("Starting OCR pass for %d pages from %s", total_pages, pdf_path.name)
 
-    # Two-pass: identify schedule pages first, then process plan pages
+    # Two-pass: classify pages first, then OCR only the pages we need to count.
     schedule_entries: dict[str, str] = {}
-    plan_pages: list[tuple[int, Path]] = []
+    plan_pages: list[tuple[int, Path, str]] = []
+    page_type_counts = defaultdict(int)
 
     for page_num, img_path in enumerate(image_paths, start=1):
-        if total_pages > 1 and _is_schedule_page(img_path, lang):
-            logger.info("Detected schedule page %d/%d: %s", page_num, total_pages, img_path.name)
-            page_schedule = _extract_schedule_from_page(img_path, lang)
-            schedule_entries.update(page_schedule)
+        if total_pages > 1 and _is_nearly_blank_image(img_path):
+            page_kind = "irrelevant"
+            page_meta = {"reason": "blank_image", "fixture_code_count": 0, "keyword_hits": 0, "detail_hits": 0, "irrelevant_hits": 0}
         else:
-            plan_pages.append((page_num, img_path))
+            page_ocr = _ocr_page_result(str(img_path), lang)
+            page_kind, page_meta = _classify_page_ocr(page_ocr)
+
+        page_type_counts[page_kind] += 1
+
+        logger.info(
+            "Classified page %d/%d as %s (%s): %s",
+            page_num,
+            total_pages,
+            page_kind,
+            page_meta.get("reason", "n/a"),
+            img_path.name,
+        )
+
+        if page_kind == "schedule":
+            page_schedule = _extract_schedule_from_page(img_path, lang)
+            if page_schedule:
+                logger.info(
+                    "Detected schedule page %d/%d: %s (%d entries)",
+                    page_num,
+                    total_pages,
+                    img_path.name,
+                    len(page_schedule),
+                )
+                schedule_entries.update(page_schedule)
+            continue
+
+        if total_pages > 1 and page_kind in {"detail", "irrelevant"}:
+            logger.info("Skipping non-target page %d/%d: %s", page_num, total_pages, img_path.name)
+            continue
+
+        plan_pages.append((page_num, img_path, page_kind))
 
     if schedule_entries:
         logger.info("Multi-page schedule: %d fixture descriptions extracted", len(schedule_entries))
+    logger.info(
+        "Page classification summary: plan=%d schedule=%d detail=%d irrelevant=%d",
+        page_type_counts.get("plan", 0),
+        page_type_counts.get("schedule", 0),
+        page_type_counts.get("detail", 0),
+        page_type_counts.get("irrelevant", 0),
+    )
 
     results = []
-    for page_num, img_path in plan_pages:
+    for page_num, img_path, page_kind in plan_pages:
         page_started = time.monotonic()
         logger.info("Page %d/%d start: %s", page_num, total_pages, img_path.name)
         if use_tiling:
@@ -716,6 +868,7 @@ def count_fixtures_from_pdf(
         result.metrics.update({
             "page_num": page_num,
             "page_total": total_pages,
+            "page_kind": page_kind,
             "page_elapsed_s": round(time.monotonic() - page_started, 3),
         })
         results.append(result)
@@ -728,9 +881,60 @@ def count_fixtures_from_pdf(
 # ── Markdown output ──────────────────────────────────────────────────────────
 
 
+def _summarize_results(results: list[FixtureCountResult]) -> dict[str, int | float]:
+    summary = {
+        "pages": len(results),
+        "elapsed_s": 0.0,
+        "fixture_types": 0,
+        "fixture_total": 0,
+        "raw_ocr_texts": 0,
+        "raw_occurrences": 0,
+        "deduped_occurrences": 0,
+        "tiles": 0,
+        "blank_tiles_skipped": 0,
+        "schedule_entries": 0,
+        "fans": 0,
+    }
+
+    for r in results:
+        metrics = r.metrics or {}
+        summary["elapsed_s"] += float(metrics.get("elapsed_s", metrics.get("page_elapsed_s", 0.0)) or 0.0)
+        summary["fixture_types"] += len(r.fixture_counts or {})
+        summary["fixture_total"] += sum(int(v) for v in (r.fixture_counts or {}).values())
+        summary["raw_ocr_texts"] += int(metrics.get("raw_ocr_texts", metrics.get("ocr_lines", 0)) or 0)
+        summary["raw_occurrences"] += int(metrics.get("raw_occurrences", metrics.get("occurrences", 0)) or 0)
+        summary["deduped_occurrences"] += int(metrics.get("deduped_occurrences", len(r.occurrences)) or 0)
+        summary["tiles"] += int(metrics.get("tile_count", 0) or 0)
+        summary["blank_tiles_skipped"] += int(metrics.get("blank_tiles_skipped", 0) or 0)
+        summary["schedule_entries"] += int(metrics.get("schedule_entries", len(r.schedule_entries)) or 0)
+        summary["fans"] += int(metrics.get("fans", r.fan_count) or 0)
+
+    summary["elapsed_s"] = round(summary["elapsed_s"], 3)
+    return summary
+
+
 def format_results_markdown(results: list[FixtureCountResult]) -> str:
     """Format OCR fixture count results as markdown."""
-    lines = []
+    lines = ["# OCR Fixture Count Results", ""]
+
+    if results:
+        summary = _summarize_results(results)
+        lines.append("## Run Summary")
+        lines.append("")
+        lines.append("| Metric | Value |")
+        lines.append("|--------|------:|")
+        lines.append(f"| Pages | {summary['pages']} |")
+        lines.append(f"| Total elapsed | {summary['elapsed_s']} s |")
+        lines.append(f"| Fixture types | {summary['fixture_types']} |")
+        lines.append(f"| Fixture total | {summary['fixture_total']} |")
+        lines.append(f"| OCR texts | {summary['raw_ocr_texts']} |")
+        lines.append(f"| Raw hits | {summary['raw_occurrences']} |")
+        lines.append(f"| Deduped hits | {summary['deduped_occurrences']} |")
+        lines.append(f"| Tiles scanned | {summary['tiles']} |")
+        lines.append(f"| Blank tiles skipped | {summary['blank_tiles_skipped']} |")
+        lines.append(f"| Schedule entries | {summary['schedule_entries']} |")
+        lines.append(f"| Fans | {summary['fans']} |")
+        lines.append("")
 
     for r in results:
         lines.append(f"### {r.page_name}")
@@ -742,6 +946,7 @@ def format_results_markdown(results: list[FixtureCountResult]) -> str:
             metric_bits = []
             for key, label in (
                 ("elapsed_s", "Elapsed"),
+                ("page_kind", "Page Kind"),
                 ("page_elapsed_s", "Page Elapsed"),
                 ("raw_ocr_texts", "OCR Texts"),
                 ("raw_occurrences", "Raw Hits"),

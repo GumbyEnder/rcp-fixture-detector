@@ -1,3 +1,16 @@
+## 2026-03-30 — OCR classification and runtime tightening
+
+### Changed
+- Added page classification for plan, schedule, detail, and irrelevant pages.
+- Skipped non-target pages in multi-page OCR runs.
+- Added a cached blank-page precheck to skip obvious blank pages before OCR.
+- Added a run-summary section to the OCR markdown report.
+- Added tests for classification, report formatting, and the PDF pipeline control flow.
+
+### Verified
+- `python3 -m py_compile rcp_detector/cli.py rcp_detector/ocr/fixture_counter.py`
+- `.venv311/bin/python -m pytest -q tests/test_fixture_counter.py tests/test_fixture_counter_reporting.py tests/test_fixture_counter_pipeline.py`
+
 ## 2026-03-30 — OCR workflow follow-up
 
 ### Changed

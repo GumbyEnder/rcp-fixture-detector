@@ -8,7 +8,7 @@ Rule of work:
 - If QC/QA fails, fix the issue and rerun the same cycle before moving on.
 
 ## 0. OCR reporting and metrics pass
-Status: pending
+Status: completed
 
 Improve report output so each run shows useful diagnostics.
 
@@ -23,8 +23,14 @@ Target outcomes:
 QC/QA gate:
 - Run on a known sheet and verify the output is readable, stable, and useful.
 
+Completed notes:
+- Added a run summary section to markdown output.
+- Exposed per-page metrics more clearly.
+- Kept the detailed per-page section below the summary.
+- Quieted PaddleOCR log spam in normal runs.
+
 ## 1. Sheet classification before heavy OCR
-Status: pending
+Status: completed
 
 Add lightweight pre-processing to identify page type before expensive OCR.
 
@@ -36,8 +42,13 @@ Target outcomes:
 QC/QA gate:
 - Test on a mixed sheet set and confirm the right pages are scanned heavily.
 
+Completed notes:
+- Added page text classification for plan, schedule, detail, and irrelevant pages.
+- Skips non-target pages in multi-page runs.
+- Uses cached OCR text for classification and schedule extraction.
+
 ## 2. Runtime reduction and caching
-Status: pending
+Status: completed
 
 Reduce end-to-end OCR time without lowering quality.
 
@@ -49,6 +60,11 @@ Target outcomes:
 
 QC/QA gate:
 - Benchmark before/after on the same drawings and compare counts.
+
+Completed notes:
+- Added a cached blank-page precheck so obvious blank sheets skip OCR entirely.
+- Cached blank-page checks with LRU caching.
+- Kept page OCR caching in place for repeated lookups during classification and extraction.
 
 ## 3. Count confidence and schedule reconciliation
 Status: pending
@@ -94,12 +110,9 @@ QC/QA gate:
 - Review the proposed flow with a mock submission before building anything.
 
 ## Working order
-1. Finish OCR reporting and metrics.
-2. Add sheet classification.
-3. Reduce runtime and tighten caching.
-4. Add confidence and reconciliation checks.
-5. Improve fan handling.
-6. Do the limited cloud UI plan last.
+1. Add confidence and reconciliation checks.
+2. Improve fan handling.
+3. Do the limited cloud UI plan last.
 
 ## Notes
 - Keep the roadmap in sync with changelog entries after each completed item.
