@@ -1,3 +1,13 @@
+## 2026-03-30 — OCR workflow follow-up
+
+### Changed
+- Fixed the `rcp_detector/cli.py` startup crash by adding the missing `logging` import.
+- Quieted noisy PaddleOCR loggers during OCR-count runs.
+- Expanded markdown output to include run metrics per page.
+- Documented the Manor East fixture scan outputs in the project workflow notes.
+
+### Verified
+- `python3 -m py_compile rcp_detector/cli.py rcp_detector/ocr/fixture_counter.py`
 
 ## 2026-03-29 — OCR fixture counter cleanup pass
 

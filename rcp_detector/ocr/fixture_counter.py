@@ -736,6 +736,27 @@ def format_results_markdown(results: list[FixtureCountResult]) -> str:
         lines.append(f"### {r.page_name}")
         lines.append("")
 
+        if r.metrics:
+            lines.append("**Run Metrics:**")
+            lines.append("")
+            metric_bits = []
+            for key, label in (
+                ("elapsed_s", "Elapsed"),
+                ("page_elapsed_s", "Page Elapsed"),
+                ("raw_ocr_texts", "OCR Texts"),
+                ("raw_occurrences", "Raw Hits"),
+                ("deduped_occurrences", "Deduped Hits"),
+                ("tile_count", "Tiles"),
+                ("blank_tiles_skipped", "Blank Tiles Skipped"),
+                ("schedule_entries", "Schedule Entries"),
+                ("fans", "Fans"),
+            ):
+                if key in r.metrics:
+                    metric_bits.append(f"{label}: {r.metrics[key]}")
+            if metric_bits:
+                lines.append("- " + " | ".join(metric_bits))
+                lines.append("")
+
         if not r.fixture_counts:
             lines.append("*No fixture codes detected.*")
             lines.append("")

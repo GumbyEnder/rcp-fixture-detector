@@ -1,3 +1,4 @@
+import logging
 import sys
 import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -29,6 +30,11 @@ def _configure_run_log(log_path: Path | None) -> None:
     file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root.addHandler(file_handler)
     logger.info("Writing detailed run log to %s", log_path)
+
+
+def _quiet_ocr_loggers() -> None:
+    for name in ("ppocr", "paddleocr"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 @click.group()
@@ -321,6 +327,7 @@ def ocr_count(ctx, source, output, log_file, dpi, no_tiling, no_fans, dedup_dist
         Path(output).with_suffix(".log") if output else (source.with_suffix(".log") if source.is_file() else Path("ocr-count.log"))
     )
     _configure_run_log(default_log)
+    _quiet_ocr_loggers()
     logger.info("OCR count inputs: %d source(s)", len(sources))
 
     for src in tqdm(sources, desc="OCR counting", unit="file"):
