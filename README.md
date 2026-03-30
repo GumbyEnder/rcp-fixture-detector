@@ -1,4 +1,6 @@
-# Electrical-Symbol-recognition-and-Wiring-design
+
+Active roadmap and work order: see TODO.md.
+
 Electrical Symbol Recognition and Wiring Design is the process of automating the identification of electrical symbols in schematic diagrams and designing efficient wiring layouts based on these symbols. This integration of computer vision, machine learning, and algorithmic techniques improves accuracy, reduces manual effort, and optimizes the design of electrical systems.
 
 Key Aspects
