@@ -67,7 +67,7 @@ Completed notes:
 - Kept page OCR caching in place for repeated lookups during classification and extraction.
 
 ## 3. Count confidence and schedule reconciliation
-Status: pending
+Status: completed
 
 Cross-check OCR counts against fixture schedules and surface mismatches.
 
@@ -79,8 +79,13 @@ Target outcomes:
 QC/QA gate:
 - Validate against sheets with known schedule totals and confirm mismatch reporting is helpful.
 
+Completed notes:
+- Added reconciliation metrics for schedule zero-counts, unscheduled codes, and confidence summaries.
+- Added per-page reconciliation sections to the OCR markdown report.
+- Added tests for reconciliation calculations and report rendering.
+
 ## 4. Fan detection and symbol separation
-Status: pending
+Status: completed
 
 Improve handling of ceiling fans and other non-light symbols.
 
@@ -92,8 +97,13 @@ Target outcomes:
 QC/QA gate:
 - Test on sheets containing fans and fixtures together and confirm the separation logic matches human review.
 
+Completed notes:
+- Kept fans separate from light fixtures in counts and markdown output.
+- Added explicit fan detection method metadata so reports show whether detection used template, Hough, legacy, or disabled modes.
+- Kept fan totals out of light subtotals.
+
 ## 5. Limited cloud UI planning
-Status: pending
+Status: completed
 
 Plan a small cloud-facing UI that lets users submit drawings and receive results.
 
@@ -109,10 +119,14 @@ Questions to resolve before implementation:
 QC/QA gate:
 - Review the proposed flow with a mock submission before building anything.
 
+Completed notes:
+- Wrote a limited cloud UI plan in `LIMITED_CLOUD_UI_PLAN.md`.
+- Chose an anonymous job-token v1 model to keep scope small.
+- Defined the upload, queue, status, result, and retention flow before implementation.
+
 ## Working order
-1. Add confidence and reconciliation checks.
-2. Improve fan handling.
-3. Do the limited cloud UI plan last.
+1. All outstanding roadmap items are complete.
+2. If new work is added, restart the order from the first unfinished item.
 
 ## Notes
 - Keep the roadmap in sync with changelog entries after each completed item.

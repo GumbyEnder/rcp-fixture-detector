@@ -1,3 +1,16 @@
+## 2026-03-30 — OCR confidence, reconciliation, and fan metadata
+
+### Changed
+- Added schedule-vs-plan reconciliation metrics to page reports.
+- Added confidence summaries and low-confidence hit reporting.
+- Added explicit fan-detection method metadata to page metrics.
+- Added a limited cloud UI plan document for the future submission workflow.
+- Marked the roadmap items complete in `TODO.md`.
+
+### Verified
+- `python3 -m py_compile rcp_detector/cli.py rcp_detector/ocr/fixture_counter.py`
+- `.venv311/bin/python -m pytest -q tests/test_fixture_counter.py tests/test_fixture_counter_reporting.py tests/test_fixture_counter_pipeline.py`
+
 ## 2026-03-30 — OCR classification and runtime tightening
 
 ### Changed

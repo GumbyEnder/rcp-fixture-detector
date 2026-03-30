@@ -461,12 +461,14 @@ def count_fixtures_tiled(
 
     # ── Step 6: Fan detection (template-based on full page, or Hough per-tile) ──
     fan_count = 0
+    fan_detection_method = "disabled"
     if detect_fans:
         try:
             from rcp_detector.detection.template_fan_detector import detect_fans_template
             nms = int(100 * dpi / 300)  # scale NMS distance with DPI
             template_fans = detect_fans_template(img, threshold=0.80, dpi=dpi, nms_dist=nms)
             fan_count = len(template_fans)
+            fan_detection_method = "template"
             logger.info("Template fan detection: %d fans found", fan_count)
         except Exception as e:
             logger.warning("Template fan detection failed (%s), falling back to Hough", e)
@@ -474,6 +476,7 @@ def count_fixtures_tiled(
                 from rcp_detector.detection.fan_detector import dedup_fan_detections
                 unique_fans = dedup_fan_detections(fan_detections, merge_radius=fan_max_radius * 4)
                 fan_count = len(unique_fans)
+                fan_detection_method = "hough"
                 logger.info("Hough fan detection fallback: %d fans", fan_count)
     elif fan_detections:
         from rcp_detector.detection.fan_detector import dedup_fan_detections
@@ -526,6 +529,17 @@ def count_fixtures_tiled(
             "deduped_occurrences": len(deduped),
             "schedule_entries": len(schedule),
             "fans": fan_count,
+            "fan_detection_method": fan_detection_method,
+            **_calculate_reconciliation(
+                FixtureCountResult(
+                    page_name=image_path.stem,
+                    fixture_counts=filtered_counts,
+                    schedule_entries=schedule,
+                    occurrences=deduped,
+                    fan_count=fan_count,
+                    all_ocr_texts=all_raw_texts,
+                )
+            ),
         },
     )
 
@@ -554,7 +568,7 @@ def count_fixtures_ocr(
     started = time.monotonic()
     result = _ocr_page_result(str(image_path), lang)
     if not result or not result[0]:
-        return FixtureCountResult(page_name=image_path.stem, metrics={"elapsed_s": round(time.monotonic() - started, 3)})
+        return FixtureCountResult(page_name=image_path.stem, metrics={"elapsed_s": round(time.monotonic() - started, 3), "fan_detection_method": "none"})
 
     all_texts: list[tuple[list, str, float]] = []
     all_raw: list[str] = []
@@ -619,6 +633,16 @@ def count_fixtures_ocr(
             "ocr_lines": len(all_texts),
             "occurrences": len(occurrences),
             "schedule_entries": len(schedule_entries),
+            "fan_detection_method": "legacy",
+            **_calculate_reconciliation(
+                FixtureCountResult(
+                    page_name=image_path.stem,
+                    fixture_counts=dict(fixture_counts),
+                    schedule_entries=schedule_entries,
+                    occurrences=occurrences,
+                    all_ocr_texts=all_raw,
+                )
+            ),
         },
     )
 
@@ -870,12 +894,38 @@ def count_fixtures_from_pdf(
             "page_total": total_pages,
             "page_kind": page_kind,
             "page_elapsed_s": round(time.monotonic() - page_started, 3),
+            **_calculate_reconciliation(result),
         })
         results.append(result)
         logger.info("Page %d/%d complete in %.1fs: %d types, %d total, %d fans", page_num, total_pages, result.metrics["page_elapsed_s"], len(result.fixture_counts), sum(result.fixture_counts.values()), result.fan_count)
 
     logger.info("Completed OCR pass for %d pages in %.1fs", len(results), time.monotonic() - started)
     return results
+
+
+def _calculate_reconciliation(result: FixtureCountResult) -> dict[str, int | float]:
+    """Summarize schedule-vs-plan agreement and OCR confidence for a page."""
+    schedule_codes = set(result.schedule_entries or {})
+    fixture_counts = result.fixture_counts or {}
+    occurrences = result.occurrences or []
+
+    zero_schedule_codes = sum(1 for code in schedule_codes if int(fixture_counts.get(code, 0) or 0) == 0)
+    unscheduled_codes = sum(1 for code in fixture_counts if code not in schedule_codes and code != "CEILING_FAN")
+
+    confidences = [float(occ.confidence) for occ in occurrences if getattr(occ, "confidence", 0.0) is not None]
+    low_conf_threshold = 0.60
+    low_conf_occurrences = sum(1 for conf in confidences if conf < low_conf_threshold)
+    avg_confidence = round(sum(confidences) / len(confidences), 3) if confidences else 0.0
+    min_confidence = round(min(confidences), 3) if confidences else 0.0
+
+    return {
+        "schedule_codes": len(schedule_codes),
+        "zero_schedule_codes": zero_schedule_codes,
+        "unscheduled_codes": unscheduled_codes,
+        "low_confidence_occurrences": low_conf_occurrences,
+        "avg_confidence": avg_confidence,
+        "min_confidence": min_confidence,
+    }
 
 
 # ── Markdown output ──────────────────────────────────────────────────────────
@@ -893,6 +943,12 @@ def _summarize_results(results: list[FixtureCountResult]) -> dict[str, int | flo
         "tiles": 0,
         "blank_tiles_skipped": 0,
         "schedule_entries": 0,
+        "zero_schedule_codes": 0,
+        "unscheduled_codes": 0,
+        "low_confidence_occurrences": 0,
+        "confidence_sum": 0.0,
+        "confidence_count": 0,
+        "min_confidence": None,
         "fans": 0,
     }
 
@@ -907,9 +963,24 @@ def _summarize_results(results: list[FixtureCountResult]) -> dict[str, int | flo
         summary["tiles"] += int(metrics.get("tile_count", 0) or 0)
         summary["blank_tiles_skipped"] += int(metrics.get("blank_tiles_skipped", 0) or 0)
         summary["schedule_entries"] += int(metrics.get("schedule_entries", len(r.schedule_entries)) or 0)
+        summary["zero_schedule_codes"] += int(metrics.get("zero_schedule_codes", 0) or 0)
+        summary["unscheduled_codes"] += int(metrics.get("unscheduled_codes", 0) or 0)
+        summary["low_confidence_occurrences"] += int(metrics.get("low_confidence_occurrences", 0) or 0)
+        occ_confidences = [float(getattr(occ, "confidence", 0.0) or 0.0) for occ in (r.occurrences or [])]
+        summary["confidence_sum"] += sum(occ_confidences)
+        summary["confidence_count"] += len(occ_confidences)
+        if occ_confidences:
+            page_min_conf = min(occ_confidences)
+            summary["min_confidence"] = page_min_conf if summary["min_confidence"] is None else min(summary["min_confidence"], page_min_conf)
         summary["fans"] += int(metrics.get("fans", r.fan_count) or 0)
 
     summary["elapsed_s"] = round(summary["elapsed_s"], 3)
+    if summary["confidence_count"]:
+        summary["avg_confidence"] = round(summary["confidence_sum"] / summary["confidence_count"], 3)
+        summary["min_confidence"] = round(summary["min_confidence"], 3) if summary["min_confidence"] is not None else 0.0
+    else:
+        summary["avg_confidence"] = 0.0
+        summary["min_confidence"] = 0.0
     return summary
 
 
@@ -933,6 +1004,11 @@ def format_results_markdown(results: list[FixtureCountResult]) -> str:
         lines.append(f"| Tiles scanned | {summary['tiles']} |")
         lines.append(f"| Blank tiles skipped | {summary['blank_tiles_skipped']} |")
         lines.append(f"| Schedule entries | {summary['schedule_entries']} |")
+        lines.append(f"| Schedule zero-counts | {summary['zero_schedule_codes']} |")
+        lines.append(f"| Unscheduled codes | {summary['unscheduled_codes']} |")
+        lines.append(f"| Low-confidence hits | {summary['low_confidence_occurrences']} |")
+        lines.append(f"| Avg confidence | {summary['avg_confidence']} |")
+        lines.append(f"| Min confidence | {summary['min_confidence']} |")
         lines.append(f"| Fans | {summary['fans']} |")
         lines.append("")
 
@@ -954,7 +1030,13 @@ def format_results_markdown(results: list[FixtureCountResult]) -> str:
                 ("tile_count", "Tiles"),
                 ("blank_tiles_skipped", "Blank Tiles Skipped"),
                 ("schedule_entries", "Schedule Entries"),
+                ("zero_schedule_codes", "Schedule Zero-Counts"),
+                ("unscheduled_codes", "Unscheduled Codes"),
+                ("low_confidence_occurrences", "Low-Confidence Hits"),
+                ("avg_confidence", "Avg Confidence"),
+                ("min_confidence", "Min Confidence"),
                 ("fans", "Fans"),
+                ("fan_detection_method", "Fan Detection Method"),
             ):
                 if key in r.metrics:
                     metric_bits.append(f"{label}: {r.metrics[key]}")
@@ -966,6 +1048,20 @@ def format_results_markdown(results: list[FixtureCountResult]) -> str:
             lines.append("*No fixture codes detected.*")
             lines.append("")
             continue
+
+        reconciliation = _calculate_reconciliation(r)
+        if reconciliation["zero_schedule_codes"] or reconciliation["unscheduled_codes"] or reconciliation["low_confidence_occurrences"]:
+            lines.append("**Reconciliation:**")
+            lines.append("")
+            lines.append("| Metric | Value |")
+            lines.append("|--------|------:|")
+            lines.append(f"| Schedule codes | {reconciliation['schedule_codes']} |")
+            lines.append(f"| Schedule zero-counts | {reconciliation['zero_schedule_codes']} |")
+            lines.append(f"| Unscheduled codes | {reconciliation['unscheduled_codes']} |")
+            lines.append(f"| Low-confidence hits | {reconciliation['low_confidence_occurrences']} |")
+            lines.append(f"| Avg confidence | {reconciliation['avg_confidence']} |")
+            lines.append(f"| Min confidence | {reconciliation['min_confidence']} |")
+            lines.append("")
 
         lights = {k: v for k, v in r.fixture_counts.items() if k.startswith("L-")}
         fans = {k: v for k, v in r.fixture_counts.items()
