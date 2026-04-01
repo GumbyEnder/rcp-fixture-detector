@@ -166,6 +166,33 @@ def write_html_report(results: list, output_path: str | Path, markdown_path: str
             "</tr>"
         )
 
+    from rcp_detector.output.reporting import build_report_bundle
+
+    qc_rows = []
+    for finding in build_report_bundle(results)["qc_findings"]:
+        qc_rows.append(
+            "<tr>"
+            f"<td>{_html_escape(finding['page_name'])}</td>"
+            f"<td>{_html_escape(finding['page_kind'])}</td>"
+            f"<td>{_html_escape(finding['fixture_total'])}</td>"
+            f"<td>{_html_escape(finding['schedule_entries'])}</td>"
+            f"<td>{_html_escape(finding['reconciliation'].get('zero_schedule_codes', 0))}</td>"
+            f"<td>{_html_escape(finding['reconciliation'].get('unscheduled_codes', 0))}</td>"
+            f"<td>{_html_escape(finding['reconciliation'].get('low_confidence_occurrences', 0))}</td>"
+            f"<td>{_html_escape('; '.join(finding['flags']))}</td>"
+            "</tr>"
+        )
+
+    qc_rows_html = ''.join(qc_rows) if qc_rows else '<tr><td colspan="8">No QC flags found.</td></tr>'
+    qc_section_html = (
+        '<section class="section" id="qc">'
+        '<h2>QC review</h2>'
+        '<table class="data-table">'
+        '<thead><tr><th>Page</th><th>Kind</th><th>Fixture total</th><th>Schedule entries</th><th>Zero schedule</th><th>Unscheduled</th><th>Low confidence</th><th>Flags</th></tr></thead>'
+        f'<tbody>{qc_rows_html}</tbody>'
+        '</table></section>'
+    )
+
     per_page_sections = []
     for result in results:
         metrics = _get(result, "metrics", {}) or {}
@@ -344,6 +371,8 @@ def write_html_report(results: list, output_path: str | Path, markdown_path: str
         </tbody>
       </table>
     </section>
+
+    {qc_section_html}
 
     <section class="section" id="pages">
       <h2>Page details</h2>

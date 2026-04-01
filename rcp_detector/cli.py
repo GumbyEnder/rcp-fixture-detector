@@ -314,6 +314,8 @@ def ocr_count(ctx, source, output, log_file, dpi, no_tiling, no_fans, dedup_dist
     from rcp_detector.ocr.fixture_counter import (
         count_fixtures_from_pdf, count_fixtures_ocr, count_fixtures_tiled, format_results_markdown,
     )
+    from rcp_detector.output.formatter import write_html_report
+    from rcp_detector.output.reporting import write_marked_pdf, write_normalized_csv, write_normalized_json
 
     source = Path(source)
     all_results = []
@@ -357,10 +359,28 @@ def ocr_count(ctx, source, output, log_file, dpi, no_tiling, no_fans, dedup_dist
         output_path = Path(output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(md)
+
         html_output = output_path.with_suffix('.html')
+        json_output = output_path.with_suffix('.json')
+        csv_output = output_path.with_suffix('.csv')
+        pdf_output = output_path.with_suffix('.marked.pdf')
+
         write_html_report(all_results, html_output, markdown_path=output_path)
+        write_normalized_json(all_results, json_output)
+        write_normalized_csv(all_results, csv_output)
+        if source.is_file() and source.suffix.lower() == '.pdf':
+            try:
+                write_marked_pdf(source, all_results, pdf_output, dpi=dpi)
+            except Exception as exc:
+                logger.warning("Marked PDF output skipped for %s: %s", source.name, exc)
+                pdf_output = None
+
         click.echo(f"\nSaved to {output_path}")
         click.echo(f"Saved HTML report to {html_output}")
+        click.echo(f"Saved JSON report to {json_output}")
+        click.echo(f"Saved CSV report to {csv_output}")
+        if pdf_output:
+            click.echo(f"Saved marked PDF to {pdf_output}")
 
 
 if __name__ == "__main__":

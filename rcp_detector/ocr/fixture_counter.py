@@ -983,6 +983,36 @@ def _summarize_results(results: list[FixtureCountResult]) -> dict[str, int | flo
         summary["min_confidence"] = 0.0
     return summary
 
+def _qc_review_rows(results: list[FixtureCountResult]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for r in results:
+        metrics = r.metrics or {}
+        flags: list[str] = []
+        if int(metrics.get("zero_schedule_codes", 0) or 0):
+            flags.append(f"{int(metrics['zero_schedule_codes'])} schedule code(s) not found in counts")
+        if int(metrics.get("unscheduled_codes", 0) or 0):
+            flags.append(f"{int(metrics['unscheduled_codes'])} counted code(s) absent from schedule")
+        if int(metrics.get("low_confidence_occurrences", 0) or 0):
+            flags.append(f"{int(metrics['low_confidence_occurrences'])} low-confidence OCR hit(s)")
+        if not sum(int(v) for v in (r.fixture_counts or {}).values()):
+            if r.schedule_entries:
+                flags.append("Schedule present, but no qualifying fixture counts remained")
+            else:
+                flags.append("No qualifying fixture counts found")
+        if int(r.fan_count or 0):
+            flags.append(f"{int(r.fan_count)} fan(s) kept separate from fixture totals")
+        if flags:
+            rows.append({
+                "page": r.page_name,
+                "fixture_total": sum(int(v) for v in (r.fixture_counts or {}).values()),
+                "schedule_entries": len(r.schedule_entries or {}),
+                "zero_schedule_codes": int(metrics.get("zero_schedule_codes", 0) or 0),
+                "unscheduled_codes": int(metrics.get("unscheduled_codes", 0) or 0),
+                "low_confidence_occurrences": int(metrics.get("low_confidence_occurrences", 0) or 0),
+                "flags": flags,
+            })
+    return rows
+
 
 def format_results_markdown(results: list[FixtureCountResult]) -> str:
     """Format OCR fixture count results as markdown."""
@@ -1010,6 +1040,20 @@ def format_results_markdown(results: list[FixtureCountResult]) -> str:
         lines.append(f"| Avg confidence | {summary['avg_confidence']} |")
         lines.append(f"| Min confidence | {summary['min_confidence']} |")
         lines.append(f"| Fans | {summary['fans']} |")
+        lines.append("")
+
+        qc_rows = _qc_review_rows(results)
+        lines.append("## QC Review")
+        lines.append("")
+        if qc_rows:
+            lines.append("| Page | Fixture total | Schedule entries | Zero schedule | Unscheduled | Low confidence | Flags |")
+            lines.append("|------|-------------:|----------------:|--------------:|------------:|---------------:|-------|")
+            for row in qc_rows:
+                lines.append(
+                    f"| {row['page']} | {row['fixture_total']} | {row['schedule_entries']} | {row['zero_schedule_codes']} | {row['unscheduled_codes']} | {row['low_confidence_occurrences']} | {'; '.join(row['flags'])} |"
+                )
+        else:
+            lines.append("No QC flags found.")
         lines.append("")
 
     for r in results:
