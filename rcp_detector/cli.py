@@ -89,7 +89,7 @@ def analyze(ctx, source, output, out_format, no_ocr, no_viz):
                 raise
 
     # Write final output
-    from rcp_detector.output.formatter import write_json, write_csv
+    from rcp_detector.output.formatter import write_json, write_csv, write_html_report
 
     if out_format in ("json", "both"):
         write_json(all_results, output_dir / "results.json", class_names)
@@ -354,10 +354,13 @@ def ocr_count(ctx, source, output, log_file, dpi, no_tiling, no_fans, dedup_dist
     click.echo(md)
 
     if output:
-        Path(output).parent.mkdir(parents=True, exist_ok=True)
-        with open(output, "w") as f:
-            f.write(md)
-        click.echo(f"\nSaved to {output}")
+        output_path = Path(output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(md)
+        html_output = output_path.with_suffix('.html')
+        write_html_report(all_results, html_output, markdown_path=output_path)
+        click.echo(f"\nSaved to {output_path}")
+        click.echo(f"Saved HTML report to {html_output}")
 
 
 if __name__ == "__main__":

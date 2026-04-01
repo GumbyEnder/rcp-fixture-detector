@@ -8,6 +8,8 @@ build/
 !config/*.yaml
 runs/
 output/
+!rcp_detector/output/
+!rcp_detector/output/**
 prepared/
 .venv/
 *.png
