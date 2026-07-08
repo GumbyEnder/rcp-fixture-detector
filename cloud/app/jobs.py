@@ -22,6 +22,7 @@ def _job_dir(job_id: str) -> Path:
 
 
 def create_job(filename: str, file_bytes: bytes) -> dict:
+    init_db()
     if not filename.lower().endswith(".pdf"):
         raise ValueError("Only PDF uploads are accepted in v1.")
     if len(file_bytes) > MAX_BYTES:
@@ -56,6 +57,7 @@ def create_job(filename: str, file_bytes: bytes) -> dict:
 
 
 def get_job(job_id: str, token: str | None) -> dict | None:
+    init_db()
     conn = connect()
     row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
     conn.close()
