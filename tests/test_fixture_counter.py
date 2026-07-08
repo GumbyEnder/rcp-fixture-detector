@@ -4,6 +4,7 @@ from rcp_detector.ocr.fixture_counter import (
     _calculate_reconciliation,
     _classify_page_text,
     _parse_schedule_entries,
+    _tile_origins,
 )
 
 
@@ -80,3 +81,18 @@ def test_calculate_reconciliation_flags_schedule_gaps_and_low_confidence():
     assert metrics["low_confidence_occurrences"] == 1
     assert metrics["avg_confidence"] == 0.665
     assert metrics["min_confidence"] == 0.42
+
+
+
+def test_tile_origins_include_trailing_edge_when_step_misses_tail():
+    origins = _tile_origins(length=2000, patch_size=640, step=320)
+
+    assert origins[0] == 0
+    assert origins[-1] == 1360
+    assert 1280 in origins
+
+
+def test_tile_origins_handle_small_or_invalid_dimensions():
+    assert _tile_origins(length=500, patch_size=640, step=320) == [0]
+    assert _tile_origins(length=0, patch_size=640, step=320) == [0]
+    assert _tile_origins(length=1000, patch_size=0, step=320) == [0]

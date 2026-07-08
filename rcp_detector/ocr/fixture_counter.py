@@ -28,7 +28,7 @@ def _get_ocr(lang: str = "en"):
     global _ocr_instance
     if _ocr_instance is None:
         from paddleocr import PaddleOCR
-        _ocr_instance = PaddleOCR(use_angle_cls=True, lang=lang, show_log=False)
+        _ocr_instance = PaddleOCR(use_angle_cls=True, lang=lang)
     return _ocr_instance
 
 
@@ -340,6 +340,20 @@ def _find_nearby_quantity_in_tile(
     return best_qty
 
 
+def _tile_origins(length: int, patch_size: int, step: int) -> list[int]:
+    """Generate tile offsets that cover full width/height, including trailing edges."""
+    if patch_size <= 0 or length <= 0:
+        return [0]
+    if length <= patch_size:
+        return [0]
+
+    last_start = max(0, length - patch_size)
+    origins = list(range(0, last_start + 1, max(1, step)))
+    if origins[-1] != last_start:
+        origins.append(last_start)
+    return origins
+
+
 def count_fixtures_tiled(
     image_path: str | Path,
     patch_size: int = 640,
@@ -380,10 +394,12 @@ def count_fixtures_tiled(
     # ── Step 2: Tile and OCR ──
     tile_count = 0
     skipped_blank = 0
-    y = 0
-    while y + patch_size <= img_h:
-        x = 0
-        while x + patch_size <= img_w:
+    x_origins = _tile_origins(img_w, patch_size, step)
+    y_origins = _tile_origins(img_h, patch_size, step)
+    logger.info("%s: tile grid %dx%d (%d total windows)", image_path.name, len(x_origins), len(y_origins), len(x_origins) * len(y_origins))
+
+    for y in y_origins:
+        for x in x_origins:
             tile = img[y:y + patch_size, x:x + patch_size]
 
             # Skip completely blank tiles (>99% near-white pixels) — performance win
@@ -391,7 +407,6 @@ def count_fixtures_tiled(
             white_ratio = np.mean(gray_tile > 250)
             if white_ratio > 0.99:
                 skipped_blank += 1
-                x += step
                 continue
 
             # OCR this tile
@@ -444,8 +459,6 @@ def count_fixtures_tiled(
             # is much more accurate than per-tile Hough circles.
 
             tile_count += 1
-            x += step
-        y += step
 
     logger.info("OCR scanned %d tiles (%d blank skipped), found %d raw occurrences",
                 tile_count, skipped_blank, len(all_occurrences))

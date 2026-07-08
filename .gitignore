@@ -12,5 +12,10 @@ output/
 !rcp_detector/output/**
 prepared/
 .venv/
+.venv311/
+.tmp_*.py
+*.log
+OCR_TEST_RESULTS.md
+SETUP_STATUS.md
 *.png
 *.jpg
