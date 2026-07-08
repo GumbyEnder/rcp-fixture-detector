@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Job {{ job['id'] }} — Results</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    ul a { margin-right: 1rem; }
+    .warn { color: #8a5a00; }
+  </style>
+</head>
+<body>
+  <h1>Fixture takeoff summary</h1>
+  <p><strong>{{ job['original_filename'] }}</strong></p>
+  <ul>
+    <li>Pages processed: {{ job['page_count'] }}</li>
+    <li>Fixture total: {{ job['fixture_total'] }}</li>
+    <li>Ceiling fans: {{ job['fan_total'] }}</li>
+    <li class="warn">QC / reconciliation flags: {{ job['warning_count'] }}</li>
+  </ul>
+  <h2>Downloads</h2>
+  <ul>
+    <li><a href="/api/jobs/{{ job['id'] }}/download/report.md?token={{ token }}">Markdown report</a></li>
+    <li><a href="/api/jobs/{{ job['id'] }}/download/report.html?token={{ token }}">HTML report</a></li>
+    <li><a href="/api/jobs/{{ job['id'] }}/download/report.json?token={{ token }}">JSON export</a></li>
+    <li><a href="/api/jobs/{{ job['id'] }}/download/report.csv?token={{ token }}">CSV export</a></li>
+    <li><a href="/api/jobs/{{ job['id'] }}/download/report.marked.pdf?token={{ token }}">Marked PDF (if generated)</a></li>
+  </ul>
+  <p><a href="/jobs/{{ job['id'] }}?token={{ token }}">Back to status</a></p>
+</body>
+</html>

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Job {{ job['id'] }} — Status</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    .status { font-size: 1.25rem; font-weight: 700; }
+    dl { display: grid; grid-template-columns: 10rem 1fr; gap: 0.35rem 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Job status</h1>
+  <p class="status" id="status">{{ job['status'] }}</p>
+  <dl>
+    <dt>Job ID</dt><dd>{{ job['id'] }}</dd>
+    <dt>File</dt><dd>{{ job['original_filename'] }}</dd>
+    <dt>Submitted</dt><dd>{{ job['created_at'] }}</dd>
+    <dt>Updated</dt><dd id="updated">{{ job['updated_at'] }}</dd>
+  </dl>
+  <p id="error" style="color:#b00020;">{% if job['error_message'] %}{{ job['error_message'] }}{% endif %}</p>
+  <p id="actions">
+    {% if job['status'] == 'completed' %}
+    <a href="/jobs/{{ job['id'] }}/result?token={{ token }}">View results</a>
+    {% endif %}
+  </p>
+  <script>
+    const jobId = {{ job['id'] | tojson }};
+    const token = {{ token | tojson }};
+    const poll = async () => {
+      const res = await fetch(`/api/jobs/${jobId}?token=${encodeURIComponent(token)}`);
+      if (!res.ok) return;
+      const d = await res.json();
+      document.getElementById('status').textContent = d.status;
+      document.getElementById('updated').textContent = d.updated_at;
+      if (d.error_message) document.getElementById('error').textContent = d.error_message;
+      if (d.status === 'completed') {
+        document.getElementById('actions').innerHTML =
+          `<a href="/jobs/${jobId}/result?token=${encodeURIComponent(token)}">View results</a>`;
+        return;
+      }
+      if (d.status === 'failed') return;
+      setTimeout(poll, 2500);
+    };
+    if ({{ job['status'] | tojson }} !== 'completed' && {{ job['status'] | tojson }} !== 'failed') poll();
+  </script>
+</body>
+</html>

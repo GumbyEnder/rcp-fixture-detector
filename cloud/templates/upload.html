@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>RCP Fixture Detector — Upload</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+    label { display: block; margin: 1rem 0 0.5rem; font-weight: 600; }
+    button { margin-top: 1rem; padding: 0.6rem 1.2rem; }
+    #msg { margin-top: 1rem; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>RCP Fixture Detector</h1>
+  <p>Upload a reflected ceiling plan PDF for OCR fixture takeoff. v1: single PDF, max 50 MB.</p>
+  <form id="uploadForm">
+    <label for="file">PDF drawing</label>
+    <input type="file" id="file" name="file" accept="application/pdf" required />
+    <button type="submit">Submit job</button>
+  </form>
+  <div id="msg"></div>
+  <script>
+    document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const msg = document.getElementById('msg');
+      const fd = new FormData();
+      fd.append('file', document.getElementById('file').files[0]);
+      msg.textContent = 'Uploading…';
+      const res = await fetch('/api/jobs', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) { msg.textContent = data.detail || 'Upload failed'; return; }
+      const url = `/jobs/${data.job_id}?token=${encodeURIComponent(data.access_token)}`;
+      msg.textContent = 'Job created. Save your access token — it is required to view results.\n\n' +
+        'Job ID: ' + data.job_id + '\nToken: ' + data.access_token + '\n\nOpening status page…';
+      window.location.href = url;
+    });
+  </script>
+</body>
+</html>
