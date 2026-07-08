@@ -20,7 +20,7 @@ def _startup() -> None:
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    return TEMPLATES.TemplateResponse("upload.html", {"request": request})
+    return TEMPLATES.TemplateResponse(request, "upload.html", {})
 
 
 @app.post("/api/jobs")
@@ -57,8 +57,9 @@ def job_status_page(request: Request, job_id: str, token: str = Query(...)):
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return TEMPLATES.TemplateResponse(
+        request,
         "status.html",
-        {"request": request, "job": job, "token": token},
+        {"job": job, "token": token},
     )
 
 
@@ -70,8 +71,9 @@ def job_result_page(request: Request, job_id: str, token: str = Query(...)):
     if job["status"] != "completed":
         raise HTTPException(status_code=409, detail="Job not completed yet")
     return TEMPLATES.TemplateResponse(
+        request,
         "result.html",
-        {"request": request, "job": job, "token": token},
+        {"job": job, "token": token},
     )
 
 
